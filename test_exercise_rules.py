@@ -1,4 +1,4 @@
-from models.exercise_rules import ExerciseRule
+from app.models.exercise_rules import ExerciseRule
 
 exercise = ExerciseRule("shoulder_raise")
 

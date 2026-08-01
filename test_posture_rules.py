@@ -1,4 +1,4 @@
-from models.posture_rules import PostureRules
+from app.models.posture_rules import PostureRules
 
 rules = PostureRules()
 
