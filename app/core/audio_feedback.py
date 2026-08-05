@@ -2,7 +2,7 @@
 audio_feedback.py
 ==================
 
-Folder location: NeuroHand/app/core/audio_feedback.py
+Folder location: PhysioAI/app/core/audio_feedback.py
 
 Purpose
 -------
@@ -24,6 +24,11 @@ Design notes
   with a logged warning instead of raising and crashing the app.
 - NO GLOBAL STATE: everything lives on the AudioFeedback instance
   (queue, locks, last-spoken timestamps, engine handle).
+- ASSET PATHS: sound-effect paths are resolved with pathlib relative
+  to this file's location (PhysioAI/assets/sounds/...), not relative
+  to the process's current working directory, so playback works the
+  same whether the app is launched from the project root, from
+  run.py in a different folder, or from a test runner.
 
 Author: Ramya (Core module)
 """
@@ -31,12 +36,12 @@ Author: Ramya (Core module)
 from __future__ import annotations
 
 import logging
-import os
 import queue
 import threading
 import time
 from dataclasses import dataclass, field
 from enum import IntEnum
+from pathlib import Path
 from typing import Dict, Optional
 
 try:
@@ -58,10 +63,16 @@ DEFAULT_SPEAKING_RATE: int = 175         # words per minute (pyttsx3 default ~20
 DEFAULT_VOLUME: float = 1.0              # 0.0 - 1.0
 DEFAULT_REPEAT_COOLDOWN_SECONDS: float = 3.0  # suppress identical message repeats
 
-SOUND_ASSET_DIR: str = os.path.join("assets", "sounds")
-SUCCESS_SOUND_FILE: str = os.path.join(SOUND_ASSET_DIR, "success.wav")
-WARNING_SOUND_FILE: str = os.path.join(SOUND_ASSET_DIR, "warning.wav")
-ERROR_SOUND_FILE: str = os.path.join(SOUND_ASSET_DIR, "error.wav")
+# Resolve assets relative to this file's location rather than the
+# current working directory:
+#   PhysioAI/
+#   ├── app/core/audio_feedback.py   <- this file
+#   └── assets/sounds/               <- sound assets live here
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
+SOUND_ASSET_DIR: Path = _PROJECT_ROOT / "assets" / "sounds"
+SUCCESS_SOUND_FILE: Path = SOUND_ASSET_DIR / "success.wav"
+WARNING_SOUND_FILE: Path = SOUND_ASSET_DIR / "warning.wav"
+ERROR_SOUND_FILE: Path = SOUND_ASSET_DIR / "error.wav"
 
 QUEUE_POLL_TIMEOUT_SECONDS: float = 0.5   # how often the worker checks for shutdown
 SHUTDOWN_JOIN_TIMEOUT_SECONDS: float = 2.0
@@ -332,7 +343,7 @@ class AudioFeedback:
             self._last_spoken[text] = now
         return False
 
-    def _play_sound_effect(self, filepath: str) -> None:
+    def _play_sound_effect(self, filepath: Path) -> None:
         """
         Play a short .wav sound effect via pygame, if enabled and
         available. Missing files or playback errors are logged, never
@@ -345,11 +356,11 @@ class AudioFeedback:
             enabled = self._sound_effects_enabled
         if not enabled or not self._mixer_ready:
             return
-        if not os.path.exists(filepath):
+        if not filepath.exists():
             logger.warning("Sound effect file not found: %s", filepath)
             return
         try:
-            sound = pygame.mixer.Sound(filepath)
+            sound = pygame.mixer.Sound(str(filepath))
             sound.play()
         except Exception as exc:  # noqa: BLE001
             logger.error("Failed to play sound effect '%s': %s", filepath, exc)

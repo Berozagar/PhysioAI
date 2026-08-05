@@ -2,14 +2,15 @@
 kinematics.py
 =============
 
-Folder location: NeuroHand/app/core/kinematics.py
+Folder location: PhysioAI/app/core/kinematics.py
 
 Purpose
 -------
 Pure mathematical primitives used to turn raw landmark coordinates
-(from any MediaPipe-compatible detector) into clinically meaningful
-kinematic quantities: distances, joint angles, velocity, acceleration,
-smoothing, range of motion, tremor, stability, and symmetry.
+(from any MediaPipe-compatible detector) into biomechanical
+quantities used across the PhysioAI pipeline: distances, joint
+angles, velocity, acceleration, smoothing, range of motion, and a
+generic movement-smoothness proxy.
 
 Design notes
 ------------
@@ -21,6 +22,10 @@ Design notes
   posture_rules.py, or any future module.
 - No global variables are used. Constants are module-level but
   immutable (EPSILON, type aliases).
+- This module targets PhysioAI's body-pose exercises (shoulder, elbow,
+  knee, back, neck), not finger/hand tracking -- the project's only
+  detector (app/detectors/pose_detector.py) is a 33-point MediaPipe
+  Pose Landmarker, not a hand landmarker.
 
 Author: Ramya (Core module)
 """
@@ -45,8 +50,8 @@ LandmarkPoint = Union[Point2D, Point3D]
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
-# Small value used to avoid division-by-zero in angle, stability and
-# symmetry calculations without introducing branching everywhere.
+# Small value used to avoid division-by-zero in angle and smoothness
+# calculations without introducing branching everywhere.
 EPSILON: float = 1e-8
 
 # ---------------------------------------------------------------------------
@@ -58,13 +63,6 @@ class ROMResult:
     min_angle: float
     max_angle: float
     range_of_motion: float
-
-
-@dataclass(frozen=True)
-class TremorResult:
-    """Result bundling a tremor index with a derived stability score."""
-    tremor_index: float
-    stability_score: float
 
 
 # ---------------------------------------------------------------------------
@@ -121,7 +119,7 @@ def calculate_angle(
         cos(theta) = (u . v) / (|u| * |v|)
         theta = arccos(cos(theta))
     This single primitive is reused by every joint-angle helper below
-    (finger, wrist, elbow, shoulder) -- only the semantic meaning of
+    (elbow, shoulder, knee, back, neck) -- only the semantic meaning of
     A, B, C changes.
 
     Args:
@@ -164,57 +162,6 @@ def calculate_angle(
     return float(np.degrees(angle_rad))
 
 
-def finger_bending_angle(
-    mcp: LandmarkPoint, pip: LandmarkPoint, tip: LandmarkPoint
-) -> float:
-    """
-    Calculate the bending angle of a finger at the PIP joint.
-
-    MediaPipe Hands reference (0-indexed, per finger e.g. index finger):
-        MCP = 5, PIP = 6, TIP = 8
-    A fully extended finger reads close to 180 degrees; a closed fist
-    reads a much smaller angle (roughly 20-60 degrees depending on the
-    finger and camera angle).
-
-    Args:
-        mcp: Metacarpophalangeal joint landmark.
-        pip: Proximal interphalangeal joint landmark (angle vertex).
-        tip: Fingertip landmark.
-
-    Returns:
-        Bending angle in degrees.
-
-    Example:
-        >>> finger_bending_angle((0, 0), (0, 1), (1, 1))
-        90.0
-    """
-    return calculate_angle(mcp, pip, tip)
-
-
-def wrist_angle(
-    elbow: LandmarkPoint, wrist: LandmarkPoint, index_finger_mcp: LandmarkPoint
-) -> float:
-    """
-    Calculate wrist flexion/extension angle.
-
-    Vertex is the wrist; the two rays run to the elbow and to the index
-    finger MCP joint (landmark 5 in MediaPipe Hands), which approximates
-    the direction of the hand/palm.
-
-    MediaPipe Pose reference: elbow = 13 (left) / 14 (right),
-    wrist = 15 (left) / 16 (right).
-
-    Args:
-        elbow: Elbow landmark.
-        wrist: Wrist landmark (angle vertex).
-        index_finger_mcp: Index finger MCP landmark (hand landmark 5).
-
-    Returns:
-        Wrist angle in degrees.
-    """
-    return calculate_angle(elbow, wrist, index_finger_mcp)
-
-
 def elbow_angle(
     shoulder: LandmarkPoint, elbow: LandmarkPoint, wrist: LandmarkPoint
 ) -> float:
@@ -250,9 +197,82 @@ def shoulder_angle(
         elbow: Elbow landmark.
 
     Returns:
-        Shoulder angle in degrees.
+        Shoulder angle in degrees. Small when the arm hangs at the
+        side, large as the arm is raised (e.g. a shoulder-raise
+        exercise).
     """
     return calculate_angle(hip, shoulder, elbow)
+
+
+def knee_angle(
+    hip: LandmarkPoint, knee: LandmarkPoint, ankle: LandmarkPoint
+) -> float:
+    """
+    Calculate knee flexion/extension angle.
+
+    MediaPipe Pose reference: hip = 23/24, knee = 25/26 (vertex),
+    ankle = 27/28.
+
+    Args:
+        hip: Hip landmark.
+        knee: Knee landmark (angle vertex).
+        ankle: Ankle landmark.
+
+    Returns:
+        Knee angle in degrees (~180 = leg straight, smaller = bent,
+        e.g. during a squat or knee-bend exercise).
+    """
+    return calculate_angle(hip, knee, ankle)
+
+
+def back_angle(
+    shoulder: LandmarkPoint, hip: LandmarkPoint, knee: LandmarkPoint
+) -> float:
+    """
+    Calculate torso (back) alignment angle at the hip.
+
+    Used for posture checks (e.g. "straighten your back" during a
+    squat or shoulder raise) rather than for a specific exercise's
+    primary movement.
+
+    MediaPipe Pose reference: shoulder = 11/12, hip = 23/24 (vertex),
+    knee = 25/26.
+
+    Args:
+        shoulder: Shoulder landmark.
+        hip: Hip landmark (angle vertex).
+        knee: Knee landmark.
+
+    Returns:
+        Back angle in degrees (~180 = upright/neutral spine, smaller
+        = leaning/rounding forward at the hip).
+    """
+    return calculate_angle(shoulder, hip, knee)
+
+
+def neck_angle(
+    ear: LandmarkPoint, shoulder: LandmarkPoint, hip: LandmarkPoint
+) -> float:
+    """
+    Calculate head/neck alignment angle at the shoulder.
+
+    A simplified proxy for forward-head posture: the angle between the
+    ear and the hip, measured at the shoulder. Close to 180 degrees
+    means the ear is roughly stacked above the hip (neutral head
+    position); a smaller angle indicates the head is drifting forward.
+
+    MediaPipe Pose reference: ear = 7/8, shoulder = 11/12 (vertex),
+    hip = 23/24.
+
+    Args:
+        ear: Ear landmark.
+        shoulder: Shoulder landmark (angle vertex).
+        hip: Hip landmark.
+
+    Returns:
+        Neck alignment angle in degrees.
+    """
+    return calculate_angle(ear, shoulder, hip)
 
 
 # ---------------------------------------------------------------------------
@@ -367,7 +387,7 @@ def smooth_series(values: Sequence[float], window_size: int = 5) -> List[float]:
     Mathematics
     -----------
     Same moving-average formula as `moving_average`, applied with a
-    sliding window across the whole series using convolution:
+    sliding window across the whole series:
         smoothed[i] = mean(values[max(0, i-w+1) : i+1])
 
     Args:
@@ -433,113 +453,43 @@ def calculate_range_of_motion(angle_sequence: Sequence[float]) -> ROMResult:
 
 
 # ---------------------------------------------------------------------------
-# Tremor & stability
+# Movement smoothness
 # ---------------------------------------------------------------------------
-def estimate_tremor(displacement_sequence: Sequence[float]) -> float:
+def calculate_smoothness(velocity_sequence: Sequence[float]) -> float:
     """
-    Estimate a lightweight tremor index from a sequence of frame-to-frame
-    displacement (or velocity) magnitudes.
+    Estimate a generic 0-100 "movement smoothness" score from a
+    sequence of recent velocity samples.
+
+    This is an internal exercise-performance proxy, NOT a clinical or
+    diagnostic measurement. It rewards movement that proceeds at a
+    consistent pace (low relative variability in velocity) over
+    movement that is jerky or erratic.
 
     Mathematics
     -----------
-    True clinical tremor analysis uses FFT band-power in the
-    physiological tremor band (~4-12 Hz). For real-time use without the
-    cost of a spectral transform, this function uses a practical proxy:
-    the standard deviation of the signal after removing its mean (DC)
-    component:
-        tremor_index = std(x - mean(x))
-    Small, involuntary oscillations around an otherwise steady or
-    smoothly moving hand increase this value; smooth, intentional
-    motion keeps it low.
-
-    Future improvement: replace with an FFT-based band-power estimate
-    once enough continuous samples are available (see module docstring
-    "future improvements" in motion_analyzer.py).
+    Uses the coefficient of variation (CV) of the velocity signal:
+        cv = std(v) / (mean(v) + EPSILON)
+        smoothness = 100 * (1 - min(cv, 1))
+    A perfectly steady velocity (cv = 0) scores 100; highly erratic
+    velocity (cv >= 1) scores 0.
 
     Args:
-        displacement_sequence: Sequence of displacement or velocity
-            magnitudes (same units throughout).
+        velocity_sequence: Sequence of recent velocity magnitudes
+            (landmark-units/second), same units throughout.
 
     Returns:
-        Non-negative tremor index. Returns 0.0 if fewer than 2 samples.
+        Smoothness score in [0, 100]. Returns 0.0 if fewer than 2
+        samples are available.
 
     Example:
-        >>> round(estimate_tremor([0.1, 0.12, 0.09, 0.11, 0.5]), 3)
-        0.158
+        >>> round(calculate_smoothness([0.10, 0.11, 0.10, 0.09, 0.10]), 1)
+        94.9
     """
-    if len(displacement_sequence) < 2:
+    if len(velocity_sequence) < 2:
         return 0.0
-    arr = np.asarray(displacement_sequence, dtype=np.float64)
-    return float(np.std(arr))
-
-
-def calculate_stability_score(tremor_index: float, range_of_motion: float) -> float:
-    """
-    Combine tremor and range of motion into a single 0-100 stability
-    score, where 100 = perfectly steady movement and 0 = highly erratic.
-
-    Mathematics
-    -----------
-        ratio = tremor_index / (range_of_motion + EPSILON)
-        score = 100 * (1 - ratio), clipped to [0, 100]
-    Normalizing tremor against ROM means the same absolute jitter is
-    penalized more heavily during small, precise movements than during
-    large, sweeping ones.
-
-    Args:
-        tremor_index: Non-negative tremor index (see estimate_tremor).
-        range_of_motion: Non-negative range of motion in the same units.
-
-    Returns:
-        Stability score in [0, 100].
-
-    Raises:
-        ValueError: If either argument is negative.
-
-    Example:
-        >>> calculate_stability_score(tremor_index=2.0, range_of_motion=40.0)
-        95.0
-    """
-    if tremor_index < 0 or range_of_motion < 0:
-        raise ValueError("tremor_index and range_of_motion must be non-negative.")
-    ratio = tremor_index / (range_of_motion + EPSILON)
-    score = 100.0 * (1.0 - ratio)
+    arr = np.asarray(velocity_sequence, dtype=np.float64)
+    mean_v = float(np.mean(arr))
+    std_v = float(np.std(arr))
+    cv = std_v / (mean_v + EPSILON)
+    score = 100.0 * (1.0 - min(cv, 1.0))
     return float(np.clip(score, 0.0, 100.0))
-
-
-# ---------------------------------------------------------------------------
-# Symmetry (reserved for future bilateral exercises)
-# ---------------------------------------------------------------------------
-def calculate_symmetry(value_left: float, value_right: float) -> float:
-    """
-    Calculate a symmetry percentage between a left-side and right-side
-    measurement (e.g. left vs right elbow angle, left vs right ROM).
-
-    Reserved for future bilateral rehabilitation exercises once
-    two-hand/two-side tracking is available from the detectors module.
-
-    Mathematics
-    -----------
-        symmetry = 100 * (1 - |L - R| / max(L, R, EPSILON))
-    Identical values yield 100% symmetry; increasing divergence
-    approaches 0%.
-
-    Args:
-        value_left: Measurement from the left side (must be >= 0).
-        value_right: Measurement from the right side (must be >= 0).
-
-    Returns:
-        Symmetry percentage in [0, 100].
-
-    Raises:
-        ValueError: If either value is negative.
-
-    Example:
-        >>> calculate_symmetry(80.0, 100.0)
-        80.0
-    """
-    if value_left < 0 or value_right < 0:
-        raise ValueError("value_left and value_right must be non-negative.")
-    denominator = max(value_left, value_right, EPSILON)
-    symmetry = 100.0 * (1.0 - abs(value_left - value_right) / denominator)
-    return float(np.clip(symmetry, 0.0, 100.0))
