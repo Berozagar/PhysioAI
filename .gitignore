@@ -11,6 +11,11 @@ env/
 # VS Code settings
 .vscode/
 
+# Test / coverage artifacts
+.pytest_cache/
+.coverage
+htmlcov/
+
 # OS files
 .DS_Store
 Thumbs.db
