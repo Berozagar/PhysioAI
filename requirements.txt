@@ -1,5 +1,8 @@
-opencv-python
-mediapipe
-numpy
-pyttsx3
-pygame
+# Pinned to the versions this project was verified against on
+# Python 3.12 / Windows. Unpinned, pip resolves to the newest majors
+# (OpenCV 5.x, MediaPipe 1.x), which is not reproducible across machines.
+opencv-python==5.0.0.93
+mediapipe==1.0.0
+numpy==2.5.1
+pyttsx3==2.99
+pygame==2.6.1
