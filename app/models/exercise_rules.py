@@ -11,6 +11,7 @@ This module defines:
 """
 
 from dataclasses import dataclass
+from typing import Optional
 
 
 # ===========================================================
@@ -68,7 +69,7 @@ EXERCISES = {
 @dataclass
 class ExerciseState:
     counter: int = 0
-    stage: str = None
+    stage: Optional[str] = None
 
 
 # ===========================================================
@@ -124,7 +125,13 @@ class ExerciseRule:
         start = self.rule["start_angle"]
         end = self.rule["end_angle"]
 
-        progress = (angle - start) / (end - start)
+        span = end - start
+
+        # A rule with start_angle == end_angle has no travel to measure.
+        if span == 0:
+            return 0.0
+
+        progress = (angle - start) / span
 
         progress = max(0.0, min(progress, 1.0))
 
